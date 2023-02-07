@@ -39,8 +39,9 @@ int init_dpdk_eal_mempool(const struct cmd_opts* opts,
     }
 
     /* check that dpdk see enough usable cores */
-    if (rte_lcore_count() != cpus->nb_needed_cpus + 1) {
+    if (rte_lcore_count() != cpus->nb_needed_pcap_cpus + cpus->nb_needed_stats_cpus + cpus->nb_needed_recv_cpus + 1) {
         printf("%s error: not enough rte_lcore founds\n", __FUNCTION__);
+        printf("Required: %d, obtained: %d\n", cpus->nb_needed_pcap_cpus + cpus->nb_needed_stats_cpus + cpus->nb_needed_recv_cpus + 1, rte_lcore_count());
         return (1);
     }
 
@@ -50,9 +51,9 @@ int init_dpdk_eal_mempool(const struct cmd_opts* opts,
 #else /* if DPDK >= 18.05 */
     nb_ports = rte_eth_dev_count_avail();
 #endif
-    if (nb_ports != cpus->nb_needed_cpus) {
+    if (nb_ports != opts->nb_total_ports) {
         printf("%s error: wanted %u NIC ports, found %u\n", __FUNCTION__,
-               cpus->nb_needed_cpus, nb_ports);
+               opts->nb_total_ports, nb_ports);
         return (1);
     }
 
