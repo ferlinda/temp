@@ -1,0 +1,85 @@
+int init_dpdk_eal_mempool(const struct cmd_opts* opts,
+                          const struct cpus_bindings* cpus,
+                          struct dpdk_ctx* dpdk)
+{
+    char**          eal_args;
+    int             eal_args_ac = 0;
+    unsigned int    nb_ports;
+    int             ret;
+
+    if (!opts || !cpus || !dpdk)
+        return (EINVAL);
+
+    /* API BREAKAGE ON 17.05 */
+#if API_OLDEST_THAN(17, 05)
+    rte_set_log_level(RTE_LOG_ERR);
+#else /* if DPDK >= 17.05 */
+    rte_log_set_global_level(RTE_LOG_ERR);
+#endif
+
+    /* craft an eal arg list */
+    eal_args = fill_eal_args(opts, cpus, dpdk, &eal_args_ac);
+    if (!eal_args) {
+        printf("%s: fill_eal_args failed.\n", __FUNCTION__);
+        return (1);
+    }
+
+#ifdef DEBUG
+    puts("EAL ARGS:");
+    for (int i = 0; eal_args[i]; i++)
+        printf("eal_args[%i] = %s\n", i, eal_args[i]);
+#endif /* DEBUG */
+
+    /* DPDK RTE EAL INIT */
+    ret = rte_eal_init(eal_args_ac, eal_args);
+    free(eal_args);
+    if (ret < 0) {
+        printf("%s: rte_eal_init failed (%d)\n", __FUNCTION__, ret);
+        return (ret);
+    }
+
+    /* check that dpdk see enough usable cores */
+    if (rte_lcore_count() != cpus->nb_needed_cpus + 1) {
+        printf("%s error: not enough rte_lcore founds\n", __FUNCTION__);
+        return (1);
+    }
+
+    /* check that dpdk detects all wanted/needed NIC ports */
+#if API_OLDEST_THAN(18, 05) /* API BREAKAGE ON 18.05 */
+    nb_ports = rte_eth_dev_count();
+#else /* if DPDK >= 18.05 */
+    nb_ports = rte_eth_dev_count_avail();
+#endif
+    if (nb_ports != cpus->nb_needed_cpus) {
+        printf("%s error: wanted %u NIC ports, found %u\n", __FUNCTION__,
+               cpus->nb_needed_cpus, nb_ports);
+        return (1);
+    }
+
+    printf("-> Create mempool of %lu mbufs of %lu octs.\n",
+           dpdk->nb_mbuf, dpdk->mbuf_sz);
+    dpdk->pktmbuf_pool = rte_mempool_create("dpdk_replay_mempool",
+                                            dpdk->nb_mbuf,
+                                            dpdk->mbuf_sz,
+                                            MBUF_CACHE_SZ,
+                                            sizeof(struct rte_pktmbuf_pool_private),
+                                            rte_pktmbuf_pool_init, NULL,
+                                            rte_pktmbuf_init, NULL,
+                                            cpus->numacore,
+                                            0);
+    if (dpdk->pktmbuf_pool == NULL) {
+        fprintf(stderr, "DPDK: RTE Mempool creation failed (%s)\n",
+                rte_strerror(rte_errno));
+#if API_AT_LEAST_AS_RECENT_AS(18, 05)
+        if (rte_errno == ENOMEM
+            && (dpdk->nb_mbuf * dpdk->mbuf_sz /1024/1024) > RTE_MAX_MEM_MB_PER_LIST)
+            fprintf(stderr, "Your version of DPDK was configured to use at maximum"
+                    " %u Mo, or you try to allocate ~%lu Mo.\n"
+                    "Try to recompile DPDK by setting CONFIG_RTE_MAX_MEM_MB_PER_LIST"
+                    " according to your needs.\n", RTE_MAX_MEM_MB_PER_LIST,
+                    dpdk->nb_mbuf * dpdk->mbuf_sz /1024/1024);
+#endif /* API_AT_LEAST_AS_RECENT_AS(18, 05) */
+        return (rte_errno);
+    }
+    return (0);
+}
